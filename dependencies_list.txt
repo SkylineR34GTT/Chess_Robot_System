@@ -1,0 +1,7 @@
+numpy==1.23.5         # For array and numerical operations
+opencv-python==4.8.0  # For image processing and handling video streams
+python-chess==1.999   # For chess-related operations and FEN notation handling
+stockfish==3.19.1     # For Stockfish chess engine integration
+pynput==1.7.6         # For mouse event handling
+scipy==1.11.2         # For advanced mathematical and scientific operations
+requests==2.31.0      # If communication with external APIs is needed (e.g., for the robot)
