@@ -251,10 +251,10 @@ def get_legal_capture_moves(src_square, piece_type, board):
     return moves 
 
 def test_piece_detection(frame, square_db, transformation_matrix):
-    """Test mode for detecting piece type and color on a specific square using full-frame detection."""
+    """Test mode for detecting piece type and color on a specific square."""
     print("\nPiece Detection Test Mode")
     print("Enter square coordinates (e.g., A1, C3) or 'q' to quit")
-    print("Note: This will show the square region and full-frame YOLO detection results")
+    print("Note: This will show the square region and raw YOLO detection results")
     
     while True:
         square = input("Enter square: ").strip().upper()
@@ -274,96 +274,79 @@ def test_piece_detection(frame, square_db, transformation_matrix):
             print(f"Square {square} not found in square database")
             continue
             
-        # Get the square's bounding box
-        x_min, y_min, x_max, y_max = square_db[square]["bbox"]
-        print(f"\n[DEBUG] Processing square {square}")
-        print(f"[DEBUG] Warped coordinates: x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}")
+        # Get the square's center coordinates
+        square_center = square_db[square]["center"]
         
-        # Transform the coordinates back to camera view
+        # Transform the center point back to camera coordinates
         inv_matrix = np.linalg.inv(transformation_matrix)
-        camera_coords = []
-        for x, y in [(x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max)]:
-            pt = np.array([[[x, y]]], dtype=np.float32)
-            transformed = cv2.perspectiveTransform(pt, inv_matrix)
-            camera_coords.append(transformed[0][0])
+        camera_point = cv2.perspectiveTransform(
+            np.array([[[square_center[0], square_center[1]]]], dtype=np.float32),
+            inv_matrix
+        )[0][0]
         
-        # Get the bounding box in camera coordinates
-        camera_coords = np.array(camera_coords, dtype=np.int32)
-        x_min_cam = min(camera_coords[:, 0])
-        x_max_cam = max(camera_coords[:, 0])
-        y_min_cam = min(camera_coords[:, 1])
-        y_max_cam = max(camera_coords[:, 1])
+        # Create a small ROI around the piece
+        x, y = int(camera_point[0]), int(camera_point[1])
+        roix_size = 35
+        roiy_size = 40  # Size of the region to analyze
+        y_offset = 10  # Offset to move ROI higher up
+        x1 = max(0, x - roix_size)
+        y1 = max(0, y - roiy_size - y_offset)  # Apply offset to move ROI higher
+        x2 = min(frame.shape[1], x + roix_size)
+        y2 = min(frame.shape[0], y + roiy_size - y_offset)  # Apply offset to move ROI higher
         
-        print(f"[DEBUG] Camera coordinates: x_min={x_min_cam}, y_min={y_min_cam}, x_max={x_max_cam}, y_max={y_max_cam}")
+        if x1 >= x2 or y1 >= y2:
+            print("Invalid ROI coordinates")
+            continue
+            
+        roi = frame[y1:y2, x1:x2]
         
-        # Create a debug frame for visualization
-        debug_frame = frame.copy()
+        # Draw the ROI on the camera view
+        frame_copy = frame.copy()
+        cv2.rectangle(frame_copy, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(frame_copy, square, (x1, y1 - 10), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
-        # Draw the transformed square on debug frame
-        cv2.rectangle(debug_frame, (x_min_cam, y_min_cam), (x_max_cam, y_max_cam), (255, 0, 0), 2)
-        cv2.putText(debug_frame, square, (x_min_cam, y_min_cam - 10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        # Show the marked square
+        cv2.imshow("Square Region", frame_copy)
         
-        # Run YOLO detection on the full frame
-        results = model(frame)
-        print(f"[DEBUG] YOLO detection complete, processing results...")
-        
-        # Process detections
-        detections = []
-        for result in results:
-            if result.boxes is not None:
-                for box in result.boxes:
-                    conf = float(box.conf.item())
-                    if conf > DETECTION_CONFIDENCE_THRESHOLD:
-                        coords = box.xyxy[0].cpu().numpy()
-                        x1, y1, x2, y2 = coords
-                        bottom_center = ((x1 + x2) / 2, y2)
-                        cls = int(box.cls.item())
-                        detections.append((bottom_center, cls, conf))
-                        # Draw all detections on debug frame
-                        cv2.rectangle(debug_frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                        cv2.circle(debug_frame, (int(bottom_center[0]), int(bottom_center[1])), 5, (0, 0, 255), -1)
-        
-        print(f"[DEBUG] Found {len(detections)} detections above confidence threshold")
-        
-        # Find detections within this square
-        square_detections = []
-        for detection in detections:
-            bottom_center, cls, conf = detection
-            if (x_min_cam <= bottom_center[0] <= x_max_cam and 
-                y_min_cam <= bottom_center[1] <= y_max_cam):
-                square_detections.append((cls, conf))
-                print(f"[DEBUG] Detection in square {square}: class={cls}, confidence={conf:.2f}")
-                
-                # Draw the piece type on the debug frame
-                piece_mapping = {
-                    # Black pieces
-                    0: "b", 1: "k", 2: "n", 3: "p", 4: "q", 5: "r",
-                    # White pieces
-                    6: "B", 7: "K", 8: "N", 9: "P", 10: "Q", 11: "R"
-                }
-                piece_type = piece_mapping[cls]
-                piece_color = "white" if piece_type.isupper() else "black"
-                cv2.putText(debug_frame, f"{piece_type} ({piece_color})", 
-                           (int(bottom_center[0]) + 10, int(bottom_center[1])),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-        
-        # Show the debug visualization
-        cv2.imshow("Piece Detection Debug", debug_frame)
-        
-        if square_detections:
-            best_piece = max(square_detections, key=lambda x: x[1])
-            cls, conf = best_piece
-            piece_mapping = {
-                # Black pieces
-                0: "b", 1: "k", 2: "n", 3: "p", 4: "q", 5: "r",
-                # White pieces
-                6: "B", 7: "K", 8: "N", 9: "P", 10: "Q", 11: "R"
-            }
-            piece_type = piece_mapping[cls]
-            piece_color = "white" if piece_type.isupper() else "black"
-            print(f"\nBest detection: {piece_type} ({piece_color}) with confidence {conf:.2f}")
+        if roi.size > 0:
+            cv2.imshow("ROI", roi)
+            
+            # Run detection on the ROI
+            results = model(roi)
+            
+            # Process detections
+            piece_detections = []
+            highest_conf = 0.0
+            for result in results:
+                if result.boxes is not None:
+                    for box in result.boxes:
+                        conf = float(box.conf.item())
+                        highest_conf = max(highest_conf, conf)
+                        if conf > DETECTION_CONFIDENCE_THRESHOLD:
+                            cls = int(box.cls.item())
+                            # Class order: black pieces first (bishop, king, knight, pawn, queen, rook)
+                            # then white pieces in same order
+                            piece_mapping = {
+                                # Black pieces
+                                0: "b", 1: "k", 2: "n", 3: "p", 4: "q", 5: "r",
+                                # White pieces
+                                6: "B", 7: "K", 8: "N", 9: "P", 10: "Q", 11: "R"
+                            }
+                            piece_type = piece_mapping[cls]
+                            piece_color = "white" if piece_type.isupper() else "black"
+                            print(f"Detected: {piece_type} ({piece_color}), Confidence: {conf:.2f}")
+                            piece_detections.append((conf, piece_type))
+                else:
+                    print("No detections")
+            
+            if piece_detections:
+                best_piece = max(piece_detections, key=lambda x: x[0])
+                print(f"\nBest detection: {best_piece[1]} with confidence {best_piece[0]:.2f}")
+            else:
+                print(f"\nNo detections above confidence threshold (threshold: {DETECTION_CONFIDENCE_THRESHOLD:.2f})")
+                print(f"Highest confidence found: {highest_conf:.2f}")
         else:
-            print("\nNo detections above confidence threshold in this square")
+            print(f"Could not extract ROI for {square}")
             
         cv2.waitKey(0)  # Wait for key press before continuing 

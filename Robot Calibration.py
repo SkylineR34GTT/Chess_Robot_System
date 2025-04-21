@@ -23,7 +23,8 @@ sleep_joints = [0.0, 0.55, -1.2, 0.0, 0.0, 0.0]
 # Set to True if using previously stored calibration coordinates (non-calibration mode).
 # In this mode, the system will always compute the grid from the stored corner coordinates
 # and allow square commands. Manual key-based movement is disabled.
-use_existing_coordinates = False
+use_existing_coordinates = True
+
 
 
 # Database filenames
@@ -102,6 +103,7 @@ def print_instructions():
     else:
         print("Square Command: Type a square notation (e.g., E4) to move there")
         print("Grid Update: Grid positions are recalculated on startup from the corner coordinates")
+        print("Swap Board: Type 'swap' to swap the board orientation (A1 becomes H8, etc.)")
     print("Manual Update: Type a command starting with 'm' to update a corner coordinate manually")
     print("Print Corner: Type 'printcorner' or 'printcorner <corner>' to display corner coordinates")
     print("Print Grid: Type 'printgrid' or 'printgrid <square>' to display grid coordinates")
@@ -193,6 +195,63 @@ def compute_chessboard_grid(square_size=SQUARE_SIZE):
         conn.commit()
     print("Chessboard grid positions computed and stored in", GRID_DB)
 
+# --- Swap Board Orientation Function ---
+def swap_board_orientation():
+    """
+    Swaps the board orientation in the grid database.
+    This makes A1 become H8, H1 become A8, etc.
+    Useful for switching between playing as white and black.
+    """
+    print("Swapping board orientation in the grid database...")
+    
+    # Create a mapping for the square swaps
+    swap_map = {}
+    for i in range(8):
+        for j in range(8):
+            original_square = f"{chr(ord('A') + i)}{j + 1}"
+            swapped_square = f"{chr(ord('H') - i)}{8 - j}"
+            swap_map[original_square] = swapped_square
+    
+    # Connect to the database
+    with sqlite3.connect(GRID_DB) as conn:
+        c = conn.cursor()
+        
+        # Create a temporary table to store the swapped data
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS squares_temp (
+                square TEXT PRIMARY KEY,
+                col INTEGER,
+                row INTEGER,
+                x REAL,
+                y REAL
+            )
+        """)
+        
+        # Get all squares from the original table
+        c.execute("SELECT square, col, row, x, y FROM squares")
+        rows = c.fetchall()
+        
+        # Insert swapped data into the temporary table
+        for row in rows:
+            original_square, col, row, x, y = row
+            swapped_square = swap_map[original_square]
+            swapped_col = ord(swapped_square[0]) - ord('A')
+            swapped_row = int(swapped_square[1:]) - 1
+            
+            c.execute("""
+                REPLACE INTO squares_temp (square, col, row, x, y)
+                VALUES (?, ?, ?, ?, ?)
+            """, (swapped_square, swapped_col, swapped_row, x, y))
+        
+        # Drop the original table and rename the temporary table
+        c.execute("DROP TABLE squares")
+        c.execute("ALTER TABLE squares_temp RENAME TO squares")
+        
+        conn.commit()
+    
+    print("Board orientation has been swapped successfully.")
+    print("A1 is now H8, H1 is now A8, etc.")
+    print("You can now play from either side of the board.")
 
 # --- Manual Update Corner Function ---
 def manual_update_corner():
@@ -225,7 +284,7 @@ def manual_update_corner():
 def command_input(client):
     global current_pose
     while True:
-        cmd = input("Enter command (e.g., E4, m to update corner, printcorner, printgrid, or 'exit'): ").strip()
+        cmd = input("Enter command (e.g., E4, m to update corner, printcorner, printgrid, swap, or 'exit'): ").strip()
         if cmd.lower() == 'exit':
             break
         if not cmd:
@@ -274,6 +333,11 @@ def command_input(client):
                         print(f"Square {square} not found.")
             continue
 
+        # Swap board orientation command
+        if cmd.lower() == 'swap':
+            swap_board_orientation()
+            continue
+
         # Otherwise, treat the command as a square command.
         if len(cmd) >= 2 and cmd[0].upper() in "ABCDEFGH" and cmd[1] in "12345678":
             square = cmd[0].upper() + cmd[1]
@@ -291,7 +355,7 @@ def command_input(client):
                 else:
                     print(f"Square {square} not found in grid database.")
         else:
-            print("Invalid command. Please enter a valid square notation, 'm', 'printcorner', or 'printgrid'.")
+            print("Invalid command. Please enter a valid square notation, 'm', 'printcorner', 'printgrid', or 'swap'.")
 
 # --- Main Program ---
 def main():

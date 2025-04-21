@@ -8,6 +8,38 @@ from config import DETECTION_CONFIDENCE_THRESHOLD
 # Load YOLO model for chess pieces
 model = YOLO("C:/Users/blueb/Downloads/yoloChess3.pt", verbose=False)
 
+#test
+"""
+piece_mapping = {
+    # Black pieces
+    0: "b", 1: "k", 2: "n", 3: "p", 4: "q", 5: "r",
+    # White pieces
+    6: "B", 7: "K", 8: "N", 9: "P", 10: "Q", 11: "R"
+}
+def draw_detections(frame, results):
+    #Draw bounding boxes and labels on the frame.
+    for result in results:
+        if result.boxes is not None:
+            for box in result.boxes:
+                conf = float(box.conf.item())
+                if conf > DETECTION_CONFIDENCE_THRESHOLD:
+                    # Get box coordinates
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                    
+                    # Get class and confidence
+                    cls = int(box.cls.item())
+                    piece = piece_mapping[cls]
+                    
+                    # Draw bounding box
+                    color = (0, 255, 0) if piece.isupper() else (0, 0, 255)  # Green for white, Red for black
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    
+                    # Draw label
+                    label = f"{piece} {conf:.2f}"
+                    cv2.putText(frame, label, (x1, y1 - 10), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)"""
+
 
 def detect_chess_pieces(frame):
     results = model(frame)
@@ -23,6 +55,13 @@ def detect_chess_pieces(frame):
                     detections.append(bottom_center)
     gamma_frame = apply_gamma_correction(frame, gamma=2.0)
     results_bright = model(gamma_frame)
+
+    #draw_detections(frame, results_bright)
+    #cv2.imshow("detections_bright", frame)
+        
+    
+    
+
     for result in results_bright:
         if result.boxes is not None:
             for box in result.boxes:

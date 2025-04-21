@@ -29,10 +29,10 @@ from config import (USE_PREVIOUS_BOARD_POSITIONS, USE_PREVIOUS_GRIDLINES,
                    PERMANENT_CORNER_LOCK, TEST_CLICK_MODE, TEST_STOCKFISH_MODE,
                    TEST_PIECE_DETECTION, output_size, STABILITY_THRESHOLD,
                    STABLE_TIME_NEEDED, RECHECK_INTERVAL, GRID_TOLERANCE,
-                   MOVEMENT_SETTLE_TIME)
+                   MOVEMENT_SETTLE_TIME, ELO)
 
 import robot_move
-from robot_move import sleep_joints
+from robot_move import sleep_joints, king_castle, queen_castle
 from captures import (check_capture_square, find_capture_move, get_legal_capture_moves, model)
 from tracking import find_differences, process_move
 
@@ -45,6 +45,11 @@ if USER_SIDE not in ['w', 'b']:
     print("Invalid input. Defaulting to white.")
     USER_SIDE = 'w'
 print(f"[DEBUG] User playing as: {'White' if USER_SIDE=='w' else 'Black'}")
+
+# Initialize system_turn based on USER_SIDE
+# If user is white, system (robot) starts as black (False)
+# If user is black, system (robot) starts as white (True)
+system_turn = (USER_SIDE == 'b')
 
 SHOW_DETECTION_OUTPUT = False
 force_standard_notation = False  # Initialize as False, will be set to True after board setup
@@ -79,7 +84,11 @@ SIMULATE_ROBOT_MOVES = False
 
 # Initialize Stockfish engine
 STOCKFISH_PATH = "C:\\Users\\blueb\\Documents\\stockfish\\stockfish-windows-x86-64-avx2"
-stockfish = Stockfish(path=STOCKFISH_PATH, parameters={"Threads": 2, "Minimum Thinking Time": 5})
+stockfish = Stockfish(path=STOCKFISH_PATH, parameters={"Threads": 1, "Minimum Thinking Time": 1})
+
+# Set Stockfish to a more manageable ELO level (1800 is approximately club player level)
+stockfish.set_elo_rating(ELO)
+print(f"[DEBUG] Stockfish engine set to ELO rating:", ELO)
 
 # Load locked positions if available
 if USE_PREVIOUS_BOARD_POSITIONS or USE_PREVIOUS_GRIDLINES:
@@ -176,6 +185,9 @@ if TEST_STOCKFISH_MODE:
 movement_detected = False
 movement_start_time = None
 
+# Import the active_color from digital_board module
+from digital_board import active_color as digital_board_active_color
+
 while True:
     if TEST_STOCKFISH_MODE:
         frame = np.zeros((output_size[1], output_size[0], 3), dtype=np.uint8)
@@ -238,8 +250,8 @@ while True:
                 set_standard_notation(digital_board)
                 force_standard_notation = True
                 active_color = 'w'  # Set active color to white
-                print("[DEBUG] Successfully set standard notation and locked board.")
-                print("[DEBUG] Active color set to white.")
+                print(f"[DEBUG] Successfully set standard notation and locked board.")
+                print(f"[DEBUG] Active color set to white.")
                 squares_with_pieces = [sq for sq, piece in digital_board.items() if piece != "."]
                 digital_board = update_digital_board(squares_with_pieces, digital_board, force_standard_notation)
                 # Output the initial FEN
@@ -276,32 +288,48 @@ while True:
                         if sq is not None:
                             detected_squares.append(sq)
                     
-                    # Create new board state preserving piece types
-                    new_board_state = old_board_state.copy()  # Start with current board state
-                    
-                    # For each detected square, check if it matches the current board state
-                    for square in detected_squares:
-                        # If the square was empty before but now has a piece, mark it as gained
-                        if old_board_state[square] == ".":
-                            # We don't know the piece type yet, so we'll let process_move handle it
-                            new_board_state[square] = "P"  # Temporary placeholder
-                    
-                    # Find squares that were occupied but are now empty
-                    for square in old_board_state:
-                        if old_board_state[square] != "." and square not in detected_squares:
-                            new_board_state[square] = "."
-                    
                     # Find differences between old and new board states
-                    lost = [sq for sq in old_board_state if old_board_state[sq] != "." and new_board_state[sq] == "."]
-                    gained = [sq for sq in old_board_state if old_board_state[sq] == "." and new_board_state[sq] != "."]
+                    lost = []
+                    gained = []
+                    
+                    # First find lost pieces (pieces that were there but are now gone)
+                    # Only consider pieces of the active color as potentially lost
+                    for square in old_board_state:
+                        piece = old_board_state[square]
+                        if piece != "." and square not in detected_squares:
+                            # Check if the piece is of the active color
+                            is_white_piece = piece.isupper()
+                            is_black_piece = piece.islower()
+                            is_active_color_piece = (is_white_piece and active_color == 'w') or (is_black_piece and active_color == 'b')
+                            
+                            if is_active_color_piece:
+                                lost.append(square)
+                                print(f"[DEBUG] Lost piece detected at {square}: {piece} (active color: {active_color})")
+                            else:
+                                print(f"[DEBUG] Ignoring non-active color piece at {square}: {piece} (active color: {active_color})")
+                    
+                    # Only look for gained pieces if we found lost pieces
+                    if lost:
+                        for square in detected_squares:
+                            if old_board_state[square] == ".":
+                                gained.append(square)
+                                print(f"[DEBUG] Gained piece detected at {square}")
                     
                     print(f"[DEBUG] Board state changes - Lost: {lost}, Gained: {gained}")
                     print(f"[DEBUG] Old board state: {old_board_state}")
-                    print(f"[DEBUG] New board state: {new_board_state}")
                     
                     # Process the move
                     if process_move(digital_board, lost, gained, frame, transformation_matrix, square_db, model, USER_SIDE, SHOW_DETECTION_OUTPUT):
-                        display_digital_board(digital_board)
+                        print("[DEBUG] Move detected and processed")
+                        # Update the previous frame only after successful move processing
+                        prev_frame = frame.copy()
+                        print("[DEBUG] Updated previous frame after move processing")
+                    else:
+                        print("[DEBUG] No move detected or move processing failed")
+                        # Initialize prev_frame if it's None
+                        if prev_frame is None:
+                            prev_frame = frame.copy()
+                            print("[DEBUG] Initialized previous frame")
                     
                     # Reset movement tracking
                     movement_detected = False
@@ -317,17 +345,22 @@ while True:
         MIN_PIECES_EXPECTED = 2
         square_db = get_square_db()
         if transformation_matrix is not None and square_db is not None and not movement_detected:
-            piece_points = detect_chess_pieces(frame)
-            detected_squares = []
-            for pt in piece_points:
-                pt_transformed = transform_point(pt, transformation_matrix)
-                sq = find_square_by_coordinate(pt_transformed[0], pt_transformed[1], square_db)
-                if sq is not None:
-                    detected_squares.append(sq)
-            if len(detected_squares) >= MIN_PIECES_EXPECTED:
-                digital_board = update_board_from_detection(detected_squares, digital_board, SHOW_DETECTION_OUTPUT, square_db, force_standard_notation)
+            # Skip detection and board updates if standard notation is forced
+            if force_standard_notation:
+                # If standard notation is forced, don't update the board from detections
+                pass
             else:
-                print("[DEBUG] Detected too few squares/pieces; skipping update to avoid clearing board.")
+                piece_points = detect_chess_pieces(frame)
+                detected_squares = []
+                for pt in piece_points:
+                    pt_transformed = transform_point(pt, transformation_matrix)
+                    sq = find_square_by_coordinate(pt_transformed[0], pt_transformed[1], square_db)
+                    if sq is not None:
+                        detected_squares.append(sq)
+                if len(detected_squares) >= MIN_PIECES_EXPECTED:
+                    digital_board = update_board_from_detection(detected_squares, digital_board, SHOW_DETECTION_OUTPUT, square_db, force_standard_notation)
+                else:
+                    print("[DEBUG] Detected too few squares/pieces; skipping update to avoid clearing board.")
     else:
         pass
 
@@ -336,6 +369,114 @@ while True:
         print(f"[DEBUG] Current FEN: {generate_fen(digital_board)}")
         print("Digital Board State:")
         display_digital_board(digital_board)
+
+    # Check if it's the robot's turn to play based on FEN active color
+    if force_standard_notation:
+        fen = generate_fen(digital_board)
+        fen_parts = fen.split(" ")
+        active_color = fen_parts[1]  # Get active color from FEN
+        
+        # Update the digital_board module's active_color only if it's different
+        from digital_board import update_active_color, active_color as digital_board_active_color
+        if active_color != digital_board_active_color:
+            update_active_color(active_color)
+        
+        # If active color doesn't match user's side, it's the robot's turn
+        if active_color != USER_SIDE:
+            print(f"[DEBUG] Robot's turn to play (active_color: {active_color}, USER_SIDE: {USER_SIDE})")
+            print(f"[DEBUG] Current FEN for engine: {fen}")
+            stockfish.set_fen_position(fen)
+            best_move = stockfish.get_best_move()
+            print(f"[DEBUG] Stockfish move: {best_move}")
+            
+            if best_move and len(best_move) >= 4:
+                src_sq = best_move[0:2].upper()
+                dst_sq = best_move[2:4].upper()
+                is_capture = (digital_board.get(dst_sq, ".") != ".")
+                
+                # Validate the move before executing
+                piece_type = digital_board.get(src_sq, ".").lower()
+                if piece_type != ".":
+                    from tracking import is_legal_move
+                    if is_legal_move(src_sq, dst_sq, piece_type, digital_board):
+                        print(f"[DEBUG] Executing robot move: {src_sq} -> {dst_sq}")
+                        
+                        # Check if this is a castling move
+                        is_castling = False
+                        is_kingside = False
+                        
+                        # Check for kingside castling
+                        if (src_sq == "E1" and dst_sq == "G1") or (src_sq == "E8" and dst_sq == "G8"):
+                            is_castling = True
+                            is_kingside = True
+                            print(f"[DEBUG] Detected kingside castling: {src_sq}->{dst_sq}")
+                        
+                        # Check for queenside castling
+                        elif (src_sq == "E1" and dst_sq == "C1") or (src_sq == "E8" and dst_sq == "C8"):
+                            is_castling = True
+                            is_kingside = False
+                            print(f"[DEBUG] Detected queenside castling: {src_sq}->{dst_sq}")
+                        
+                        # Move the king
+                        digital_board[dst_sq] = digital_board.get(src_sq, ".")
+                        digital_board[src_sq] = "."
+                        
+                        # If it's a castling move, also move the rook
+                        if is_castling:
+                            if is_kingside:
+                                if src_sq == "E1":
+                                    digital_board["F1"] = digital_board.get("H1", ".")
+                                    digital_board["H1"] = "."
+                                else:  # E8
+                                    digital_board["F8"] = digital_board.get("H8", ".")
+                                    digital_board["H8"] = "."
+                            else:  # queenside
+                                if src_sq == "E1":
+                                    digital_board["D1"] = digital_board.get("A1", ".")
+                                    digital_board["A1"] = "."
+                                else:  # E8
+                                    digital_board["D8"] = digital_board.get("A8", ".")
+                                    digital_board["A8"] = "."
+                            print(f"[DEBUG] Moved rook for castling")
+                        
+                        display_digital_board(digital_board)
+                        
+                        # Use the appropriate castling function if it's a castling move
+                        if is_castling:
+                            # Determine if we're castling white or black pieces
+                            # If USER_SIDE is 'w', then the robot is playing black
+                            # If USER_SIDE is 'b', then the robot is playing white
+                            # For castling, we need to pass True for white castling, False for black castling
+                            is_white_castling = (USER_SIDE == 'b')  # Robot is playing white if USER_SIDE is 'b'
+                            
+                            # Check if the castling move is for white or black
+                            # If the source square is E1, it's white castling
+                            # If the source square is E8, it's black castling
+                            is_white_castling = (src_sq == "E1")
+                            
+                            print(f"[DEBUG] Castling {'white' if is_white_castling else 'black'} pieces")
+                            
+                            if is_kingside:
+                                king_castle(robot_client, is_white_castling)
+                            else:
+                                queen_castle(robot_client, is_white_castling)
+                        else:
+                            execute_robot_move(robot_client, best_move, USER_SIDE == 'w', is_capture)
+                            
+                        # Update active color after robot move
+                        new_active_color = 'w' if active_color == 'b' else 'b'
+                        if new_active_color != digital_board_active_color:
+                            update_active_color(new_active_color)
+                        active_color = new_active_color
+                        fen = update_fen_after_move(digital_board)
+                        print(f"[DEBUG] FEN after robot move: {fen}")
+                    else:
+                        print(f"[DEBUG] Illegal move detected by engine: {src_sq} -> {dst_sq}")
+                else:
+                    print(f"[DEBUG] No piece found at source square: {src_sq}")
+            else:
+                print("[DEBUG] No valid move returned by engine")
+        
 
 if not TEST_STOCKFISH_MODE and cap is not None:
     cap.release()

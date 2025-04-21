@@ -73,14 +73,22 @@ def update_fen_after_move(digital_board):
     print(f"[DEBUG] Current FEN after move: {fen}")
     return fen
 
-def update_active_color():
-    """Toggle the active color between 'w' and 'b' after each move."""
+def update_active_color(new_color=None):
+    """Update the active color. If new_color is provided, set it directly.
+    Otherwise, toggle between 'w' and 'b'."""
     global active_color
     old_color = active_color
-    active_color = 'b' if active_color == 'w' else 'w'
-    print(f"[DEBUG] Active color changed from {old_color} to {active_color}")
+    
+    if new_color is not None:
+        active_color = new_color
+    else:
+        active_color = 'b' if active_color == 'w' else 'w'
+    
+    # Only print if the color actually changed
+    if old_color != active_color:
+        print(f"[DEBUG] Active color changed from {old_color} to {active_color}")
+    
     return active_color
-
 
 def generate_fen(board):
     """Generate FEN string from the current board state."""
@@ -201,6 +209,13 @@ def update_digital_board(piece_list, digital_board, force_standard_notation=Fals
     return digital_board
 
 def update_board_from_detection(detected_squares, digital_board, SHOW_DETECTION_OUTPUT=False, square_db=None, force_standard_notation=False):
+    """Updates the digital board based on detection results."""
+    # If standard notation is forced, don't update board based on detections
+    if force_standard_notation:
+        print("[DEBUG] Standard notation is forced; preserving current board state.")
+        # Return the board unchanged to preserve all pieces
+        return digital_board
+        
     old_binary = {sq: ("P" if digital_board[sq] != "." else ".") for sq in digital_board}
     new_binary = {}
     for sq in digital_board.keys():
@@ -235,7 +250,7 @@ def update_board_from_detection(detected_squares, digital_board, SHOW_DETECTION_
         if candidates and square_db is not None:
             src_center = square_db[src]["center"]
             dst = min(candidates, key=lambda s: np.hypot(square_db[s]["center"][0] - src_center[0],
-                                                         square_db[s]["center"][1] - src_center[1]))
+                                                       square_db[s]["center"][1] - src_center[1]))
             if SHOW_DETECTION_OUTPUT:
                 print(f"[DEBUG] Capture move detected: {src} -> {dst} (capturing piece: {digital_board[src]})")
             # Always update moves, but preserve piece type if forcing standard notation

@@ -1,12 +1,15 @@
 # Configuration flags for the chess robot
 
+#Stockfish Difficulty
+ELO = 1200
+
 # Board and grid position settings
 Prev_positions = True
 USE_PREVIOUS_BOARD_POSITIONS = Prev_positions
 USE_PREVIOUS_GRIDLINES = Prev_positions
 
 # Detection settings
-DETECTION_CONFIDENCE_THRESHOLD = 0.1
+DETECTION_CONFIDENCE_THRESHOLD = 0.35
 
 # Corner lock settings
 PERMANENT_CORNER_LOCK = True    #keep using saved positions

@@ -14,6 +14,11 @@ piece_mapping = {
     6: "B", 7: "K", 8: "N", 9: "P", 10: "Q", 11: "R"
 }
 
+def apply_gamma_correction(image, gamma=1.2):
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0) ** invGamma) * 255 for i in range(256)]).astype("uint8")
+    return cv2.LUT(image, table)
+
 def draw_detections(frame, results):
     """Draw bounding boxes and labels on the frame."""
     for result in results:
